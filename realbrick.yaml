@@ -1,22 +1,22 @@
 name: Fine-tune BERT with LoRA on Yelp Reviews
-description: Fine-tunes a BERT model using Hugging Face Trainer with LoRA on Yelp Review Full dataset.
+description: Fine-tunes a BERT model using Hugging Face Transformers and PEFT LoRA on Yelp Review Full dataset.
 inputs:
   - name: dataset_name
     type: String
-    description: Hugging Face dataset name (e.g. yelp_review_full)
+    description: Name of Hugging Face dataset (e.g. yelp_review_full)
   - name: model_uri
     type: String
-    description: Pretrained model URI (e.g. hf://google-bert/bert-base-cased)
+    description: Pretrained Hugging Face model URI (e.g. bert-base-cased)
   - name: output_dir
     type: String
-    description: Local output dir for Hugging Face training (e.g. /tmp/outputs/output_dir)
+    description: Local output directory for Hugging Face Trainer
 outputs:
   - name: trained_model
     type: Directory
-    description: Fine-tuned model artifacts
+    description: Directory containing the fine-tuned model
   - name: training_logs
     type: Directory
-    description: Training logs
+    description: Directory containing training logs
 implementation:
   container:
     image: python:3.9
@@ -25,21 +25,22 @@ implementation:
       - -c
       - |
         set -e
-        pip install --quiet --no-cache-dir transformers peft kubeflow-training-sdk datasets
-        python3 -u -c "$0" "$@"  # Run the inline Python script
+        pip install --quiet --no-cache-dir transformers datasets peft accelerate
+        python3 -u -c "$0" "$@"  # Run inline Python
       - |
-        import transformers
-        from peft import LoraConfig
-        from kubeflow.training import TrainingClient
-        from kubeflow.storage_initializer.hugging_face import (
-            HuggingFaceModelParams,
-            HuggingFaceTrainerParams,
-            HuggingFaceDatasetParams,
-        )
         import argparse
         import os
         import shutil
+        from datasets import load_dataset
+        from transformers import (
+            AutoTokenizer,
+            AutoModelForSequenceClassification,
+            TrainingArguments,
+            Trainer,
+        )
+        from peft import get_peft_model, LoraConfig, TaskType
 
+        # Parse arguments
         parser = argparse.ArgumentParser()
         parser.add_argument("--dataset_name", type=str, required=True)
         parser.add_argument("--model_uri", type=str, required=True)
@@ -48,58 +49,64 @@ implementation:
         parser.add_argument("--training_logs", type=str, required=True)
         args = parser.parse_args()
 
-        # Ensure output directories exist
         os.makedirs(args.output_dir, exist_ok=True)
         os.makedirs(args.trained_model, exist_ok=True)
         os.makedirs(args.training_logs, exist_ok=True)
 
-        # Run training
-        TrainingClient().train(
-            name="fine-tune-bert",
-            model_provider_parameters=HuggingFaceModelParams(
-                model_uri=args.model_uri,
-                transformer_type=transformers.AutoModelForSequenceClassification,
-            ),
-            dataset_provider_parameters=HuggingFaceDatasetParams(
-                repo_id=args.dataset_name,
-                split="train[:3000]",
-            ),
-            trainer_parameters=HuggingFaceTrainerParams(
-                training_parameters=transformers.TrainingArguments(
-                    output_dir=args.output_dir,
-                    save_strategy="no",
-                    do_eval=False,
-                    disable_tqdm=True,
-                    log_level="info",
-                ),
-                lora_config=LoraConfig(
-                    r=8,
-                    lora_alpha=8,
-                    lora_dropout=0.1,
-                    bias="none",
-                ),
-            ),
-            num_workers=1,
-            num_procs_per_worker=1,
-            resources_per_worker={
-                "gpu": 0,
-                "cpu": 2,
-                "memory": "4G",
-            },
+        # Load dataset
+        dataset = load_dataset(args.dataset_name, split="train[:3000]")
+        dataset = dataset.rename_column("label", "labels")
+
+        # Load tokenizer and model
+        tokenizer = AutoTokenizer.from_pretrained(args.model_uri)
+        model = AutoModelForSequenceClassification.from_pretrained(args.model_uri, num_labels=5)
+
+        # Apply LoRA
+        peft_config = LoraConfig(
+            task_type=TaskType.SEQ_CLS,
+            r=8,
+            lora_alpha=8,
+            lora_dropout=0.1,
+            bias="none",
+        )
+        model = get_peft_model(model, peft_config)
+
+        # Tokenize
+        def preprocess(example):
+            return tokenizer(example["text"], truncation=True, padding="max_length", max_length=128)
+
+        dataset = dataset.map(preprocess, batched=True)
+
+        # Training setup
+        training_args = TrainingArguments(
+            output_dir=args.output_dir,
+            per_device_train_batch_size=8,
+            num_train_epochs=1,
+            logging_dir=os.path.join(args.output_dir, "logs"),
+            logging_steps=10,
+            save_strategy="no",
         )
 
-        # Copy output to Kubeflow's expected locations
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        # Copy model output to trained_model dir
         for f in os.listdir(args.output_dir):
             src = os.path.join(args.output_dir, f)
-            dst_model = os.path.join(args.trained_model, f)
+            dst = os.path.join(args.trained_model, f)
             if os.path.isdir(src):
-                shutil.copytree(src, dst_model, dirs_exist_ok=True)
+                shutil.copytree(src, dst, dirs_exist_ok=True)
             else:
-                shutil.copy2(src, dst_model)
+                shutil.copy2(src, dst)
 
-        # Write dummy logs
+        # Write dummy log
         with open(os.path.join(args.training_logs, "log.txt"), "w") as f:
-            f.write("Training completed.")
+            f.write("Training complete.")
     args:
       - --dataset_name
       - { inputValue: dataset_name }
