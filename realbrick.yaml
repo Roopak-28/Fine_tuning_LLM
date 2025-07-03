@@ -1,29 +1,32 @@
 name: Fine-tune BERT with LoRA on Yelp Reviews
-description: Fine-tunes a BERT model using Hugging Face Trainer with LoRA on a subset of the Yelp Review Full dataset.
+description: Fine-tunes a BERT model using Hugging Face Trainer with LoRA on Yelp Review Full dataset.
 inputs:
   - name: dataset_name
     type: String
-    description: Name of the Hugging Face dataset to use (e.g. yelp_review_full)
+    description: Hugging Face dataset name (e.g. yelp_review_full)
   - name: model_uri
     type: String
-    description: Pretrained model URI to fine-tune (e.g. hf://google-bert/bert-base-cased)
+    description: Pretrained model URI (e.g. hf://google-bert/bert-base-cased)
   - name: output_dir
     type: String
-    description: Directory to save Hugging Face Trainer output
+    description: Local output dir for Hugging Face training (e.g. /tmp/outputs/output_dir)
 outputs:
   - name: trained_model
     type: Directory
-    description: Directory where fine-tuned model artifacts are saved
+    description: Fine-tuned model artifacts
   - name: training_logs
     type: Directory
-    description: Directory where training logs are stored
+    description: Training logs
 implementation:
   container:
     image: python:3.9
     command:
-      - python3
-      - -u
+      - sh
       - -c
+      - |
+        set -e
+        pip install --quiet --no-cache-dir transformers peft kubeflow-training-sdk datasets
+        python3 -u -c "$0" "$@"  # Run the inline Python script
       - |
         import transformers
         from peft import LoraConfig
@@ -45,12 +48,12 @@ implementation:
         parser.add_argument("--training_logs", type=str, required=True)
         args = parser.parse_args()
 
-        # Ensure directories exist
+        # Ensure output directories exist
         os.makedirs(args.output_dir, exist_ok=True)
         os.makedirs(args.trained_model, exist_ok=True)
         os.makedirs(args.training_logs, exist_ok=True)
 
-        # Train model
+        # Run training
         TrainingClient().train(
             name="fine-tune-bert",
             model_provider_parameters=HuggingFaceModelParams(
@@ -76,27 +79,27 @@ implementation:
                     bias="none",
                 ),
             ),
-            num_workers=4,
-            num_procs_per_worker=2,
+            num_workers=1,
+            num_procs_per_worker=1,
             resources_per_worker={
-                "gpu": 2,
-                "cpu": 5,
-                "memory": "10G",
+                "gpu": 0,
+                "cpu": 2,
+                "memory": "4G",
             },
         )
 
-        # Copy model output directory to trained_model
-        if os.path.exists(args.output_dir):
-            for f in os.listdir(args.output_dir):
-                full_path = os.path.join(args.output_dir, f)
-                if os.path.isdir(full_path):
-                    shutil.copytree(full_path, os.path.join(args.trained_model, f), dirs_exist_ok=True)
-                else:
-                    shutil.copy2(full_path, args.trained_model)
+        # Copy output to Kubeflow's expected locations
+        for f in os.listdir(args.output_dir):
+            src = os.path.join(args.output_dir, f)
+            dst_model = os.path.join(args.trained_model, f)
+            if os.path.isdir(src):
+                shutil.copytree(src, dst_model, dirs_exist_ok=True)
+            else:
+                shutil.copy2(src, dst_model)
 
-        # Write logs
-        with open(os.path.join(args.training_logs, "LOG.txt"), "w") as f:
-            f.write("Training completed. Output saved to: " + args.output_dir)
+        # Write dummy logs
+        with open(os.path.join(args.training_logs, "log.txt"), "w") as f:
+            f.write("Training completed.")
     args:
       - --dataset_name
       - { inputValue: dataset_name }
