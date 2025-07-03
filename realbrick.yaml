@@ -1,7 +1,12 @@
-name: Fine-tune BERT with LoRA on Yelp Dataset
-description: Fine-tunes a BERT model using Hugging Face and LoRA on 3000 samples from the Yelp dataset.
-inputs: []
-outputs: []
+name: Fine-tune BERT with LoRA on Yelp Reviews
+description: Fine-tunes a BERT model using Hugging Face Trainer with LoRA on a subset of the Yelp Review Full dataset.
+inputs:
+  - { name: dataset_name, type: String }
+  - { name: model_uri, type: String }
+  - { name: output_dir, type: String }
+outputs:
+  - { name: trained_model, type: Directory }
+  - { name: training_logs, type: Directory }
 implementation:
   container:
     image: python:3.9
@@ -9,8 +14,10 @@ implementation:
       - sh
       - -c
       - |
-        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location transformers peft kubeflow-training kubeflow-storage || \
-        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location transformers peft kubeflow-training kubeflow-storage --user
+        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location \
+        "transformers" "datasets" "peft" "kubeflow-training-sdk" || \
+        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location \
+        "transformers" "datasets" "peft" "kubeflow-training-sdk" --user
         exec "$0" "$@"
       - python3
       - -u
@@ -24,20 +31,31 @@ implementation:
             HuggingFaceTrainerParams,
             HuggingFaceDatasetParams,
         )
+        import argparse
+        import os
 
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--dataset_name", type=str, required=True)
+        parser.add_argument("--model_uri", type=str, required=True)
+        parser.add_argument("--output_dir", type=str, required=True)
+        parser.add_argument("--trained_model", type=str, required=True)
+        parser.add_argument("--training_logs", type=str, required=True)
+        args = parser.parse_args()
+
+        # Run training
         TrainingClient().train(
             name="fine-tune-bert",
             model_provider_parameters=HuggingFaceModelParams(
-                model_uri="hf://google-bert/bert-base-cased",
+                model_uri=args.model_uri,
                 transformer_type=transformers.AutoModelForSequenceClassification,
             ),
             dataset_provider_parameters=HuggingFaceDatasetParams(
-                repo_id="yelp_review_full",
+                repo_id=args.dataset_name,
                 split="train[:3000]",
             ),
             trainer_parameters=HuggingFaceTrainerParams(
                 training_parameters=transformers.TrainingArguments(
-                    output_dir="test_trainer",
+                    output_dir=args.output_dir,
                     save_strategy="no",
                     do_eval=False,
                     disable_tqdm=True,
@@ -58,3 +76,25 @@ implementation:
                 "memory": "10G",
             },
         )
+
+        # Ensure output directories exist
+        os.makedirs(args.trained_model, exist_ok=True)
+        os.makedirs(args.training_logs, exist_ok=True)
+
+        # Save a simple marker or model snapshot (optional)
+        with open(os.path.join(args.trained_model, "DONE.txt"), "w") as f:
+            f.write("Training completed.")
+
+        with open(os.path.join(args.training_logs, "LOG.txt"), "w") as f:
+            f.write("Logs saved to output_dir: " + args.output_dir)
+    args:
+      - --dataset_name
+      - { inputValue: dataset_name }
+      - --model_uri
+      - { inputValue: model_uri }
+      - --output_dir
+      - { inputValue: output_dir }
+      - --trained_model
+      - { outputPath: trained_model }
+      - --training_logs
+      - { outputPath: training_logs }
