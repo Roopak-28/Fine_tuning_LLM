@@ -1,110 +1,100 @@
 name: Fine-tune BERT with LoRA on Yelp Reviews
-description: Fine-tunes a BERT model using Hugging Face Trainer with LoRA on a subset of the Yelp Review Full dataset.
+description: Fine-tunes a BERT model using Hugging Face Trainer with LoRA on Yelp Review Full dataset.
 inputs:
   - name: dataset_name
     type: String
-    description: Name of the Hugging Face dataset to use for fine-tuning (e.g., yelp_review_full).
+    description: Name of the dataset on Hugging Face Hub (e.g., yelp_review_full).
   - name: model_uri
     type: String
-    description: Hugging Face model URI to load for fine-tuning (e.g., hf://google-bert/bert-base-cased).
+    description: Pretrained model URI from Hugging Face (e.g., hf://google-bert/bert-base-cased).
   - name: output_dir
     type: String
-    description: Directory path to save the fine-tuned model and training logs.
+    description: Directory path to save model checkpoints and logs.
 outputs:
   - name: trained_model
     type: Directory
-    description: Output directory containing the fine-tuned model.
+    description: Directory where the fine-tuned model is saved.
   - name: training_logs
     type: Directory
-    description: Output directory containing logs from the training process.
+    description: Directory where training logs are stored.
 implementation:
   container:
     image: python:3.9
-    command:
-      - sh
-      - -c
-      - |
-        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location \
-        transformers datasets peft kubeflow-training-sdk || \
-        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location \
-        transformers datasets peft kubeflow-training-sdk --user
-        exec "$0" "$@"
-      - python3
-      - -u
-      - -c
-      - |
-        import transformers
-        from peft import LoraConfig
-        from kubeflow.training import TrainingClient
+    command: [
+        python3,
+        -u,
+        -c,
+        "import transformers;
+        from peft import LoraConfig;
+        from kubeflow.training import TrainingClient;
         from kubeflow.storage_initializer.hugging_face import (
-            HuggingFaceModelParams,
-            HuggingFaceTrainerParams,
-            HuggingFaceDatasetParams,
-        )
-        import argparse
-        import os
+        HuggingFaceModelParams,
+        HuggingFaceTrainerParams,
+        HuggingFaceDatasetParams
+        );
+        import argparse, os;
 
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--dataset_name", type=str, required=True)
-        parser.add_argument("--model_uri", type=str, required=True)
-        parser.add_argument("--output_dir", type=str, required=True)
-        parser.add_argument("--trained_model", type=str, required=True)
-        parser.add_argument("--training_logs", type=str, required=True)
-        args = parser.parse_args()
+        parser = argparse.ArgumentParser();
+        parser.add_argument('--dataset_name', type=str, required=True);
+        parser.add_argument('--model_uri', type=str, required=True);
+        parser.add_argument('--output_dir', type=str, required=True);
+        parser.add_argument('--trained_model', type=str, required=True);
+        parser.add_argument('--training_logs', type=str, required=True);
+        args = parser.parse_args();
 
-        # Run training
         TrainingClient().train(
-            name="fine-tune-bert",
-            model_provider_parameters=HuggingFaceModelParams(
-                model_uri=args.model_uri,
-                transformer_type=transformers.AutoModelForSequenceClassification,
-            ),
-            dataset_provider_parameters=HuggingFaceDatasetParams(
-                repo_id=args.dataset_name,
-                split="train[:3000]",
-            ),
-            trainer_parameters=HuggingFaceTrainerParams(
-                training_parameters=transformers.TrainingArguments(
-                    output_dir=args.output_dir,
-                    save_strategy="no",
-                    do_eval=False,
-                    disable_tqdm=True,
-                    log_level="info",
-                ),
-                lora_config=LoraConfig(
-                    r=8,
-                    lora_alpha=8,
-                    lora_dropout=0.1,
-                    bias="none",
-                ),
-            ),
-            num_workers=4,
-            num_procs_per_worker=2,
-            resources_per_worker={
-                "gpu": 2,
-                "cpu": 5,
-                "memory": "10G",
-            },
+        name='fine-tune-bert',
+        model_provider_parameters=HuggingFaceModelParams(
+        model_uri=args.model_uri,
+        transformer_type=transformers.AutoModelForSequenceClassification
+        ),
+        dataset_provider_parameters=HuggingFaceDatasetParams(
+        repo_id=args.dataset_name,
+        split='train[:3000]'
+        ),
+        trainer_parameters=HuggingFaceTrainerParams(
+        training_parameters=transformers.TrainingArguments(
+        output_dir=args.output_dir,
+        save_strategy='no',
+        do_eval=False,
+        disable_tqdm=True,
+        log_level='info'
+        ),
+        lora_config=LoraConfig(
+        r=8,
+        lora_alpha=8,
+        lora_dropout=0.1,
+        bias='none'
         )
+        ),
+        num_workers=4,
+        num_procs_per_worker=2,
+        resources_per_worker={
+        'gpu': 2,
+        'cpu': 5,
+        'memory': '10G'
+        }
+        );
 
-        # Ensure output directories exist
-        os.makedirs(args.trained_model, exist_ok=True)
-        os.makedirs(args.training_logs, exist_ok=True)
+        os.makedirs(args.trained_model, exist_ok=True);
+        os.makedirs(args.training_logs, exist_ok=True);
 
-        # Save markers
-        with open(os.path.join(args.trained_model, "DONE.txt"), "w") as f:
-            f.write("Training completed.")
+        with open(os.path.join(args.trained_model, 'DONE.txt'), 'w') as f:
+        f.write('Training complete');
 
-        with open(os.path.join(args.training_logs, "LOG.txt"), "w") as f:
-            f.write("Logs saved to output_dir: " + args.output_dir)
+        with open(os.path.join(args.training_logs, 'LOG.txt'), 'w') as f:
+        f.write('Training logs written to: ' + args.output_dir);",
+      ]
     args:
-      - --dataset_name
-      - { inputValue: dataset_name }
-      - --model_uri
-      - { inputValue: model_uri }
-      - --output_dir
-      - { inputValue: output_dir }
-      - --trained_model
-      - { outputPath: trained_model }
-      - --training_logs
-      - { outputPath: training_logs }
+      [
+        --dataset_name,
+        { inputValue: dataset_name },
+        --model_uri,
+        { inputValue: model_uri },
+        --output_dir,
+        { inputValue: output_dir },
+        --trained_model,
+        { outputPath: trained_model },
+        --training_logs,
+        { outputPath: training_logs },
+      ]
