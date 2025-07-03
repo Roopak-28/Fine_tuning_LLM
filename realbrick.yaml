@@ -1,12 +1,22 @@
 name: Fine-tune BERT with LoRA on Yelp Reviews
 description: Fine-tunes a BERT model using Hugging Face Trainer with LoRA on a subset of the Yelp Review Full dataset.
 inputs:
-  - { name: dataset_name, type: String }
-  - { name: model_uri, type: String }
-  - { name: output_dir, type: String }
+  - name: dataset_name
+    type: String
+    description: Name of the Hugging Face dataset to use for fine-tuning (e.g., yelp_review_full).
+  - name: model_uri
+    type: String
+    description: Hugging Face model URI to load for fine-tuning (e.g., hf://google-bert/bert-base-cased).
+  - name: output_dir
+    type: String
+    description: Directory path to save the fine-tuned model and training logs.
 outputs:
-  - { name: trained_model, type: Directory }
-  - { name: training_logs, type: Directory }
+  - name: trained_model
+    type: Directory
+    description: Output directory containing the fine-tuned model.
+  - name: training_logs
+    type: Directory
+    description: Output directory containing logs from the training process.
 implementation:
   container:
     image: python:3.9
@@ -15,9 +25,9 @@ implementation:
       - -c
       - |
         PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location \
-        "transformers" "datasets" "peft" "kubeflow-training-sdk" || \
+        transformers datasets peft kubeflow-training-sdk || \
         PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location \
-        "transformers" "datasets" "peft" "kubeflow-training-sdk" --user
+        transformers datasets peft kubeflow-training-sdk --user
         exec "$0" "$@"
       - python3
       - -u
@@ -81,7 +91,7 @@ implementation:
         os.makedirs(args.trained_model, exist_ok=True)
         os.makedirs(args.training_logs, exist_ok=True)
 
-        # Save a simple marker or model snapshot (optional)
+        # Save markers
         with open(os.path.join(args.trained_model, "DONE.txt"), "w") as f:
             f.write("Training completed.")
 
