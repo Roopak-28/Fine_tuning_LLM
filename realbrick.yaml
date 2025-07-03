@@ -1,0 +1,60 @@
+name: Fine-tune BERT with LoRA on Yelp Dataset
+description: Fine-tunes a BERT model using Hugging Face and LoRA on 3000 samples from the Yelp dataset.
+inputs: []
+outputs: []
+implementation:
+  container:
+    image: python:3.9
+    command:
+      - sh
+      - -c
+      - |
+        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location transformers peft kubeflow-training kubeflow-storage || \
+        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location transformers peft kubeflow-training kubeflow-storage --user
+        exec "$0" "$@"
+      - python3
+      - -u
+      - -c
+      - |
+        import transformers
+        from peft import LoraConfig
+        from kubeflow.training import TrainingClient
+        from kubeflow.storage_initializer.hugging_face import (
+            HuggingFaceModelParams,
+            HuggingFaceTrainerParams,
+            HuggingFaceDatasetParams,
+        )
+
+        TrainingClient().train(
+            name="fine-tune-bert",
+            model_provider_parameters=HuggingFaceModelParams(
+                model_uri="hf://google-bert/bert-base-cased",
+                transformer_type=transformers.AutoModelForSequenceClassification,
+            ),
+            dataset_provider_parameters=HuggingFaceDatasetParams(
+                repo_id="yelp_review_full",
+                split="train[:3000]",
+            ),
+            trainer_parameters=HuggingFaceTrainerParams(
+                training_parameters=transformers.TrainingArguments(
+                    output_dir="test_trainer",
+                    save_strategy="no",
+                    do_eval=False,
+                    disable_tqdm=True,
+                    log_level="info",
+                ),
+                lora_config=LoraConfig(
+                    r=8,
+                    lora_alpha=8,
+                    lora_dropout=0.1,
+                    bias="none",
+                ),
+            ),
+            num_workers=4,
+            num_procs_per_worker=2,
+            resources_per_worker={
+                "gpu": 2,
+                "cpu": 5,
+                "memory": "10G",
+            },
+        )
