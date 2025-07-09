@@ -1,32 +1,15 @@
-name: Universal Model Fine-tuning Inline
-description: Fine-tunes a model using HuggingFace or PyTorch code, all logic inline (no train.py required).
+name: Create Time Series Sequences
+description: Generates input-output sequences from normalized time series data grouped by component ID.
+
 inputs:
-  - name: task_type
-    type: String
-    description: Task type (e.g. text_classification)
-  - name: dataset_name
-    type: String
-    description: Dataset identifier
-  - name: model_uri
-    type: String
-    description: Model hub ID or path
-  - name: framework
-    type: String
-    description: 'huggingface' or 'pytorch'
-  - name: output_dir
-    type: String
-    description: Output dir
-  - name: epochs
-    type: Integer
-    description: Number of epochs
-    default: 1
+  - { name: json_data, type: JsonArray }
+  - { name: input_len, type: Integer }
+  - { name: output_len, type: Integer }
+
 outputs:
-  - name: trained_model
-    type: Directory
-    description: Fine-tuned model
-  - name: training_logs
-    type: Directory
-    description: Logs and status
+  - { name: X_sequences, type: NumpyArray }
+  - { name: y_sequences, type: NumpyArray }
+
 implementation:
   container:
     image: python:3.9
@@ -34,21 +17,60 @@ implementation:
       - sh
       - -c
       - |
-        pip install --quiet torch torchvision datasets transformers peft accelerate && python -c "import argparse, os; parser = argparse.ArgumentParser(); parser.add_argument('--task_type'); parser.add_argument('--dataset_name'); parser.add_argument('--model_uri'); parser.add_argument('--framework'); parser.add_argument('--output_dir'); parser.add_argument('--trained_model'); parser.add_argument('--training_logs'); parser.add_argument('--epochs', type=int, default=1); args = parser.parse_args(); os.makedirs(args.trained_model, exist_ok=True); os.makedirs(args.training_logs, exist_ok=True); with open(os.path.join(args.training_logs, 'log.txt'), 'w') as f: f.write(f'Framework: {args.framework}\\n'); f.write(f'Task: {args.task_type}\\n'); f.write(f'Dataset: {args.dataset_name}\\n'); f.write(f'Epochs: {args.epochs}\\n'); f.write('This is a test log to show that inline script executed.\\n'); with open(os.path.join(args.trained_model, 'model.txt'), 'w') as f: f.write('This is a dummy trained model output file.\\n'); f.write(f'Model URI: {args.model_uri}\\n')"
+        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet pandas numpy || \
+        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet pandas numpy --user
+        exec "$0" "$@"
+      - python3
+      - -u
+      - -c
+      - |
+        import pandas as pd
+        import numpy as np
+        import json
+        import argparse
+        import os
+
+        def create_sequences(df, input_len, output_len):
+            X, y = [], []
+            grouped = df.groupby('component_id')
+            for _, group in grouped:
+                values = group[['value_norm', 'component_id']].values
+                for i in range(len(values) - input_len - output_len):
+                    X.append(values[i:i + input_len])
+                    y.append(values[i + input_len:i + input_len + output_len, 0])
+            return np.array(X), np.array(y)
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--json_data", type=str, required=True)
+        parser.add_argument("--input_len", type=int, required=True)
+        parser.add_argument("--output_len", type=int, required=True)
+        parser.add_argument("--X_sequences", type=str)
+        parser.add_argument("--y_sequences", type=str)
+        args = parser.parse_args()
+
+        # Load JSON input
+        with open(args.json_data, "r") as f:
+            data = json.load(f)
+        df = pd.DataFrame(data)
+
+        X, y = create_sequences(df, args.input_len, args.output_len)
+
+        # Save NumPy arrays
+        os.makedirs(os.path.dirname(args.X_sequences), exist_ok=True)
+        os.makedirs(os.path.dirname(args.y_sequences), exist_ok=True)
+
+        np.save(args.X_sequences, X)
+        np.save(args.y_sequences, y)
+
+        print(f"Generated {len(X)} input-output sequence pairs.")
     args:
-      - --task_type
-      - { inputValue: task_type }
-      - --dataset_name
-      - { inputValue: dataset_name }
-      - --model_uri
-      - { inputValue: model_uri }
-      - --framework
-      - { inputValue: framework }
-      - --output_dir
-      - { inputValue: output_dir }
-      - --trained_model
-      - { outputPath: trained_model }
-      - --training_logs
-      - { outputPath: training_logs }
-      - --epochs
-      - { inputValue: epochs }
+      - --json_data
+      - { inputPath: json_data }
+      - --input_len
+      - { inputValue: input_len }
+      - --output_len
+      - { inputValue: output_len }
+      - --X_sequences
+      - { outputPath: X_sequences }
+      - --y_sequences
+      - { outputPath: y_sequences }
