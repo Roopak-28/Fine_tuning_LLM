@@ -1,25 +1,21 @@
-name: PyTorch Yelp Simple NN Training
-description: Simple PyTorch model for text classification on Yelp Review Full dataset (Elyra Component, inline)
+name: PyTorch Simple NN Training on Yelp
+description: Trains a simple PyTorch neural network model for text classification on Yelp Review Full dataset (inline component).
 
 inputs:
-  - name: epochs
-    type: Integer
-    default: 2
-  - name: batch_size
-    type: Integer
-    default: 64
-  - name: vocab_size
-    type: Integer
-    default: 2000
-  - name: max_train_samples
-    type: Integer
-    default: 10000
+  - name: dataset_name
+    type: String
+    description: Hugging Face dataset name (e.g. yelp_review_full)
+  - name: output_dir
+    type: String
+    description: Directory to save all model output and logs
 
 outputs:
-  - name: model_output
-    type: File
-  - name: train_log
-    type: File
+  - name: trained_model
+    type: Directory
+    description: Directory containing trained PyTorch model file (.pt) and vectorizer
+  - name: training_logs
+    type: Directory
+    description: Directory containing training logs
 
 implementation:
   container:
@@ -28,9 +24,10 @@ implementation:
       - sh
       - -c
       - |
+        set -e
         pip install --quiet torch datasets scikit-learn
-        python3 -u - <<EOF
-        import sys
+        python3 -u - <<'EOF'
+        import argparse, os, shutil
         import torch
         import torch.nn as nn
         import torch.optim as optim
@@ -38,67 +35,88 @@ implementation:
         from datasets import load_dataset
         from sklearn.feature_extraction.text import CountVectorizer
         import numpy as np
-        import os
 
-        # Read args from environment
-        epochs = int(os.environ.get('EPOCHS', 2))
-        batch_size = int(os.environ.get('BATCH_SIZE', 64))
-        vocab_size = int(os.environ.get('VOCAB_SIZE', 2000))
-        max_train_samples = int(os.environ.get('MAX_TRAIN_SAMPLES', 10000))
-        model_output = os.environ.get('MODEL_OUTPUT', '/tmp/model.pt')
-        train_log = os.environ.get('TRAIN_LOG', '/tmp/train.log')
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--dataset_name", type=str, required=True)
+        parser.add_argument("--output_dir", type=str, required=True)
+        parser.add_argument("--trained_model", type=str, required=True)
+        parser.add_argument("--training_logs", type=str, required=True)
+        args = parser.parse_args()
 
-        sys.stdout = open(train_log, "w")
-        sys.stderr = sys.stdout
+        os.makedirs(args.output_dir, exist_ok=True)
+        os.makedirs(args.trained_model, exist_ok=True)
+        os.makedirs(args.training_logs, exist_ok=True)
 
-        print("Loading Yelp dataset...", flush=True)
-        ds = load_dataset("yelp_review_full", split=f"train[:{max_train_samples}]")
-        X = CountVectorizer(max_features=vocab_size).fit_transform(ds["text"]).toarray()
-        y = np.array(ds["label"])
-        dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.long))
-        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        # --- Load and preprocess dataset ---
+        dataset = load_dataset(args.dataset_name, split="train[:3000]")
+        texts = dataset["text"]
+        labels = dataset["label"]
+        num_classes = len(set(labels))
 
+        # --- Text vectorization ---
+        vectorizer = CountVectorizer(max_features=2000)
+        X = vectorizer.fit_transform(texts).toarray()
+        y = np.array(labels)
+
+        X_tensor = torch.tensor(X, dtype=torch.float32)
+        y_tensor = torch.tensor(y, dtype=torch.long)
+        data = TensorDataset(X_tensor, y_tensor)
+        loader = DataLoader(data, batch_size=64, shuffle=True)
+
+        # --- Simple NN definition ---
         class SimpleNN(nn.Module):
-            def __init__(self, input_dim, n_classes):
+            def __init__(self, input_dim, num_classes):
                 super().__init__()
                 self.fc1 = nn.Linear(input_dim, 256)
                 self.relu = nn.ReLU()
-                self.fc2 = nn.Linear(256, n_classes)
+                self.fc2 = nn.Linear(256, num_classes)
             def forward(self, x):
                 return self.fc2(self.relu(self.fc1(x)))
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = SimpleNN(vocab_size, len(set(y))).to(device)
+        model = SimpleNN(X.shape[1], num_classes).to(device)
         optimizer = optim.Adam(model.parameters(), lr=1e-3)
         loss_fn = nn.CrossEntropyLoss()
 
-        for epoch in range(epochs):
-            total_loss, correct, total = 0, 0, 0
-            for xb, yb in loader:
-                xb, yb = xb.to(device), yb.to(device)
-                optimizer.zero_grad()
-                preds = model(xb)
-                loss = loss_fn(preds, yb)
-                loss.backward()
-                optimizer.step()
-                total_loss += loss.item() * xb.size(0)
-                correct += (preds.argmax(1) == yb).sum().item()
-                total += xb.size(0)
-            print(f"Epoch {epoch+1}/{epochs} — loss={(total_loss/total):.4f}, acc={(correct/total):.4f}", flush=True)
+        # --- Train loop ---
+        log_file = os.path.join(args.training_logs, "train.log")
+        with open(log_file, "w") as log:
+            for epoch in range(2):
+                total_loss, correct, total = 0, 0, 0
+                for xb, yb in loader:
+                    xb, yb = xb.to(device), yb.to(device)
+                    optimizer.zero_grad()
+                    preds = model(xb)
+                    loss = loss_fn(preds, yb)
+                    loss.backward()
+                    optimizer.step()
+                    total_loss += loss.item() * xb.size(0)
+                    correct += (preds.argmax(1) == yb).sum().item()
+                    total += xb.size(0)
+                acc = correct / total
+                avg_loss = total_loss / total
+                log.write(f"Epoch {epoch+1}/2 — loss={avg_loss:.4f}, acc={acc:.4f}\n")
+                log.flush()
 
-        torch.save(model.state_dict(), model_output)
-        print("Model saved to", model_output, flush=True)
+        # --- Save model and vectorizer ---
+        torch.save(model.state_dict(), os.path.join(args.trained_model, "model.pt"))
+        import joblib
+        joblib.dump(vectorizer, os.path.join(args.trained_model, "vectorizer.pkl"))
+
+        # Optionally, copy any training logs to output dir
+        shutil.copy2(log_file, os.path.join(args.training_logs, "train.log"))
+
+        # Write completion
+        with open(os.path.join(args.training_logs, "done.txt"), "w") as f:
+            f.write("Training complete.")
+
         EOF
-    env:
-      - name: EPOCHS
-        value: { inputValue: epochs }
-      - name: BATCH_SIZE
-        value: { inputValue: batch_size }
-      - name: VOCAB_SIZE
-        value: { inputValue: vocab_size }
-      - name: MAX_TRAIN_SAMPLES
-        value: { inputValue: max_train_samples }
-      - name: MODEL_OUTPUT
-        value: { outputPath: model_output }
-      - name: TRAIN_LOG
-        value: { outputPath: train_log }
+    args:
+      - --dataset_name
+      - { inputValue: dataset_name }
+      - --output_dir
+      - { inputValue: output_dir }
+      - --trained_model
+      - { outputPath: trained_model }
+      - --training_logs
+      - { outputPath: training_logs }
