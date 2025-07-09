@@ -1,5 +1,5 @@
 name: Universal Model Fine-tuning Inline
-description: Fine-tunes a model using HuggingFace or PyTorch code, all logic inline.
+description: Fine-tunes a model using HuggingFace or PyTorch code, all logic inline (no train.py required).
 inputs:
   - name: task_type
     type: String
@@ -36,50 +36,49 @@ implementation:
       - |
         set -e
         pip install --quiet torch torchvision datasets transformers peft accelerate
-        python3 -u - <<EOF
-        import argparse
-        import os
+        echo '
+import argparse
+import os
 
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--task_type")
-        parser.add_argument("--dataset_name")
-        parser.add_argument("--model_uri")
-        parser.add_argument("--framework")
-        parser.add_argument("--output_dir")
-        parser.add_argument("--trained_model")
-        parser.add_argument("--training_logs")
-        parser.add_argument("--epochs", type=int, default=1)
-        args = parser.parse_args()
+parser = argparse.ArgumentParser()
+parser.add_argument("--task_type")
+parser.add_argument("--dataset_name")
+parser.add_argument("--model_uri")
+parser.add_argument("--framework")
+parser.add_argument("--output_dir")
+parser.add_argument("--trained_model")
+parser.add_argument("--training_logs")
+parser.add_argument("--epochs", type=int, default=1)
+args = parser.parse_args()
 
-        os.makedirs(args.trained_model, exist_ok=True)
-        os.makedirs(args.training_logs, exist_ok=True)
+os.makedirs(args.trained_model, exist_ok=True)
+os.makedirs(args.training_logs, exist_ok=True)
 
-        # Minimal logic: write outputs to confirm execution
-        with open(os.path.join(args.training_logs, "log.txt"), "w") as f:
-            f.write(f"Framework: {args.framework}\\n")
-            f.write(f"Task: {args.task_type}\\n")
-            f.write(f"Dataset: {args.dataset_name}\\n")
-            f.write(f"Epochs: {args.epochs}\\n")
-            f.write("This is a test log to show that inline script executed.\\n")
+with open(os.path.join(args.training_logs, "log.txt"), "w") as f:
+    f.write(f"Framework: {args.framework}\\n")
+    f.write(f"Task: {args.task_type}\\n")
+    f.write(f"Dataset: {args.dataset_name}\\n")
+    f.write(f"Epochs: {args.epochs}\\n")
+    f.write("This is a test log to show that inline script executed.\\n")
 
-        with open(os.path.join(args.trained_model, "model.txt"), "w") as f:
-            f.write("This is a dummy trained model output file.\\n")
-            f.write(f"Model URI: {args.model_uri}\\n")
-        EOF
+with open(os.path.join(args.trained_model, "model.txt"), "w") as f:
+    f.write("This is a dummy trained model output file.\\n")
+    f.write(f"Model URI: {args.model_uri}\\n")
+' | python3 - \
+  --task_type "$0" \
+  --dataset_name "$1" \
+  --model_uri "$2" \
+  --framework "$3" \
+  --output_dir "$4" \
+  --trained_model "$5" \
+  --training_logs "$6" \
+  --epochs "$7"
     args:
-      - --task_type
       - { inputValue: task_type }
-      - --dataset_name
       - { inputValue: dataset_name }
-      - --model_uri
       - { inputValue: model_uri }
-      - --framework
       - { inputValue: framework }
-      - --output_dir
       - { inputValue: output_dir }
-      - --trained_model
       - { outputPath: trained_model }
-      - --training_logs
       - { outputPath: training_logs }
-      - --epochs
       - { inputValue: epochs }
