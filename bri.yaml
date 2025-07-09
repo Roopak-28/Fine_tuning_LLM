@@ -1,42 +1,19 @@
 name: Universal Model Fine-tuning
-description: Fine-tunes HuggingFace or PyTorch models on any dataset.
+description: Fine-tunes a model using HuggingFace or PyTorch code.
 inputs:
-  - name: task_type
-    type: String
-    description: Task type (e.g. text_classification, image_classification)
-  - name: dataset_name
-    type: String
-    description: Dataset identifier (e.g. yelp_review_full, CIFAR10)
-  - name: model_uri
-    type: String
-    description: Model hub ID or path (e.g. bert-base-uncased)
-  - name: framework
-    type: String
-    description: Framework ('huggingface' or 'pytorch')
-  - name: output_dir
-    type: String
-    description: Output directory for intermediate files
-  - name: epochs
-    type: Integer
-    description: Number of epochs
-    default: 1
+  - { name: task_type,      type: String,  description: Task type }
+  - { name: dataset_name,   type: String,  description: Dataset name or path }
+  - { name: model_uri,      type: String,  description: Model hub ID or path }
+  - { name: framework,      type: String,  description: 'huggingface' or 'pytorch' }
+  - { name: output_dir,     type: String,  description: Output dir }
+  - { name: epochs,         type: Integer, description: Number of epochs, default: 1 }
 outputs:
-  - name: trained_model
-    type: Directory
-    description: Fine-tuned model directory
-  - name: training_logs
-    type: Directory
-    description: Training logs and metrics
+  - { name: trained_model,  type: Directory, description: Fine-tuned model }
+  - { name: training_logs,  type: Directory, description: Logs and status }
 implementation:
   container:
     image: python:3.9
-    command:
-      - sh
-      - -c
-      - |
-        set -e
-        pip install --quiet torch torchvision datasets transformers peft accelerate
-        python3 train.py "$@"
+    command: ["python", "train.py"]
     args:
       - --task_type
       - { inputValue: task_type }
