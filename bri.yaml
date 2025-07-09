@@ -15,17 +15,11 @@ implementation:
   container:
     image: python:3.9
     command:
-      - sh
-      - -c
-      - |
-        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet torch datasets scikit-learn || \
-        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet torch datasets scikit-learn --user
-        exec "$0" "$@"
-      - python3
+      - python
       - -u
       - -c
       - |
-        import os
+        import sys
         import torch
         import torch.nn as nn
         import torch.optim as optim
@@ -44,29 +38,31 @@ implementation:
         parser.add_argument("--train_log", type=str, required=True)
         args = parser.parse_args()
 
-        # Logging setup
-        import sys
         sys.stdout = open(args.train_log, "w")
         sys.stderr = sys.stdout
 
-        print("Loading dataset...")
-        ds = load_dataset("yelp_review_full", split="train[:{}]".format(args.max_train_samples))
+        print("Installing packages...", flush=True)
+        import subprocess
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "torch", "datasets", "scikit-learn"])
+
+        print("Loading dataset...", flush=True)
+        ds = load_dataset("yelp_review_full", split=f"train[:{args.max_train_samples}]")
         texts = ds["text"]
         labels = ds["label"]
         num_classes = len(set(labels))
 
-        print("Vectorizing text...")
+        print("Vectorizing text...", flush=True)
         vectorizer = CountVectorizer(max_features=args.vocab_size)
         X = vectorizer.fit_transform(texts).toarray()
         y = np.array(labels)
 
-        print("Preparing tensors...")
+        print("Preparing tensors...", flush=True)
         X_tensor = torch.tensor(X, dtype=torch.float32)
         y_tensor = torch.tensor(y, dtype=torch.long)
         dataset = TensorDataset(X_tensor, y_tensor)
         loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
-        print("Building model...")
+        print("Building model...", flush=True)
         class SimpleNN(nn.Module):
             def __init__(self, input_dim, num_classes):
                 super().__init__()
@@ -85,7 +81,7 @@ implementation:
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
-        print("Starting training...")
+        print("Starting training...", flush=True)
         for epoch in range(args.epochs):
             total_loss = 0
             correct = 0
@@ -103,11 +99,12 @@ implementation:
                 total += batch_x.size(0)
             acc = correct / total
             avg_loss = total_loss / total
-            print(f"Epoch {epoch+1}/{args.epochs} - Loss: {avg_loss:.4f} - Accuracy: {acc:.4f}")
+            print(f"Epoch {epoch+1}/{args.epochs} - Loss: {avg_loss:.4f} - Accuracy: {acc:.4f}", flush=True)
 
-        print("Saving model...")
+        print("Saving model...", flush=True)
         torch.save(model.state_dict(), args.model_output)
-        print("Training complete. Model saved at", args.model_output)
+        print("Training complete. Model saved at", args.model_output, flush=True)
+
     args:
       - --epochs
       - { inputValue: epochs }
