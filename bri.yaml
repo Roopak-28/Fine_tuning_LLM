@@ -8,8 +8,8 @@ inputs:
   - { name: max_train_samples, type: Integer, default: 10000 }
 
 outputs:
-  - { name: model_output, type: File }
-  - { name: train_log, type: File }
+  - { name: model_output, type: Dataset }
+  - { name: train_log, type: Dataset }
 
 implementation:
   container:
