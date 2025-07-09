@@ -1,0 +1,180 @@
+name: Universal Model Fine-tuning
+description: Fine-tunes HuggingFace Transformers or generic PyTorch models on a given dataset. Works for both text and vision tasks.
+inputs:
+  - name: task_type
+    type: String
+    description: Task type, e.g. text_classification, image_classification, regression, etc.
+  - name: dataset_name
+    type: String
+    description: Dataset identifier (HuggingFace dataset name, torchvision dataset name, or path to dataset)
+  - name: model_uri
+    type: String
+    description: HuggingFace model hub ID, torch hub repo, or local model class/path
+  - name: framework
+    type: String
+    description: Framework to use: 'huggingface' or 'pytorch'
+  - name: output_dir
+    type: String
+    description: Directory for saving training output
+  - name: epochs
+    type: Integer
+    description: Number of training epochs
+    default: 1
+outputs:
+  - name: trained_model
+    type: Directory
+    description: Fine-tuned model directory
+  - name: training_logs
+    type: Directory
+    description: Training logs, metrics, and artifacts
+implementation:
+  container:
+    image: python:3.9
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        pip install --quiet --no-cache-dir torch torchvision datasets transformers peft accelerate
+        python3 -u -c "$0" "$@"  # inline script
+      - |
+        import argparse, os, shutil, sys
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--task_type", type=str, required=True)
+        parser.add_argument("--dataset_name", type=str, required=True)
+        parser.add_argument("--model_uri", type=str, required=True)
+        parser.add_argument("--framework", type=str, required=True)
+        parser.add_argument("--output_dir", type=str, required=True)
+        parser.add_argument("--trained_model", type=str, required=True)
+        parser.add_argument("--training_logs", type=str, required=True)
+        parser.add_argument("--epochs", type=int, default=1)
+        args = parser.parse_args()
+
+        os.makedirs(args.output_dir, exist_ok=True)
+        os.makedirs(args.trained_model, exist_ok=True)
+        os.makedirs(args.training_logs, exist_ok=True)
+
+        # Minimal logging setup
+        log_path = os.path.join(args.training_logs, "log.txt")
+        sys.stdout = open(log_path, "a")
+        sys.stderr = sys.stdout
+
+        if args.framework.lower() == "huggingface":
+            from datasets import load_dataset
+            from transformers import (
+                AutoTokenizer,
+                AutoModelForSequenceClassification,
+                Trainer,
+                TrainingArguments,
+            )
+            from peft import get_peft_model, LoraConfig, TaskType as LoRATaskType
+
+            # Only works for text_classification for now (expand as needed)
+            dataset = load_dataset(args.dataset_name, split="train[:3000]")
+            dataset = dataset.rename_column("label", "labels")
+            tokenizer = AutoTokenizer.from_pretrained(args.model_uri)
+            model = AutoModelForSequenceClassification.from_pretrained(
+                args.model_uri,
+                num_labels=5
+            )
+
+            # Use LoRA if available for classification
+            config = LoraConfig(
+                task_type=LoRATaskType.SEQ_CLS,
+                r=8,
+                lora_alpha=8,
+                lora_dropout=0.1,
+                bias="none",
+            )
+            model = get_peft_model(model, config)
+
+            def preprocess(ex):
+                return tokenizer(ex["text"], truncation=True, padding="max_length", max_length=128)
+
+            dataset = dataset.map(preprocess, batched=True)
+
+            args_train = TrainingArguments(
+                output_dir=args.output_dir,
+                per_device_train_batch_size=8,
+                num_train_epochs=args.epochs,
+                logging_dir=os.path.join(args.output_dir, "logs"),
+                logging_steps=10,
+                save_strategy="no"
+            )
+
+            trainer = Trainer(
+                model=model,
+                args=args_train,
+                train_dataset=dataset
+            )
+            trainer.train()
+
+            # Save model output
+            for f in os.listdir(args.output_dir):
+                src = os.path.join(args.output_dir, f)
+                dst = os.path.join(args.trained_model, f)
+                if os.path.isdir(src):
+                    shutil.copytree(src, dst, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(src, dst)
+
+            print("Training completed (HuggingFace)")
+
+        elif args.framework.lower() == "pytorch":
+            import torch
+            import torchvision
+            from torch.utils.data import DataLoader
+            import torch.nn as nn
+            import torch.optim as optim
+
+            # Example: image classification with torchvision (expand for custom tasks)
+            transform = torchvision.transforms.Compose([
+                torchvision.transforms.Resize((32, 32)),
+                torchvision.transforms.ToTensor(),
+            ])
+            dataset = getattr(torchvision.datasets, args.dataset_name)(
+                root="./data", train=True, download=True, transform=transform
+            )
+            dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
+            # Use a default model for demonstration (replace as needed)
+            model = torchvision.models.resnet18(num_classes=10)
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            model = model.to(device)
+            criterion = nn.CrossEntropyLoss()
+            optimizer = optim.Adam(model.parameters(), lr=1e-3)
+
+            for epoch in range(args.epochs):
+                model.train()
+                for batch in dataloader:
+                    inputs, labels = batch[0].to(device), batch[1].to(device)
+                    optimizer.zero_grad()
+                    outputs = model(inputs)
+                    loss = criterion(outputs, labels)
+                    loss.backward()
+                    optimizer.step()
+
+            torch.save(model.state_dict(), os.path.join(args.trained_model, "model.pt"))
+            print("Training completed (PyTorch)")
+
+        else:
+            print("Unknown framework:", args.framework)
+            sys.exit(1)
+
+        sys.stdout.close()
+    args:
+      - --task_type
+      - { inputValue: task_type }
+      - --dataset_name
+      - { inputValue: dataset_name }
+      - --model_uri
+      - { inputValue: model_uri }
+      - --framework
+      - { inputValue: framework }
+      - --output_dir
+      - { inputValue: output_dir }
+      - --trained_model
+      - { outputPath: trained_model }
+      - --training_logs
+      - { outputPath: training_logs }
+      - --epochs
+      - { inputValue: epochs }
