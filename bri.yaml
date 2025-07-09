@@ -13,7 +13,7 @@ outputs:
 
 implementation:
   container:
-    image: 
+    image: python:3.9
     command:
       - sh
       - -c
