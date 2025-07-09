@@ -1,15 +1,25 @@
 name: PyTorch Yelp Simple NN Training
-description: Simple PyTorch model for text classification on Yelp Review Full dataset (Elyra Component)
+description: Simple PyTorch model for text classification on Yelp Review Full dataset (Elyra Component, inline)
 
 inputs:
-  - { name: epochs, type: Integer, default: 2 }
-  - { name: batch_size, type: Integer, default: 64 }
-  - { name: vocab_size, type: Integer, default: 2000 }
-  - { name: max_train_samples, type: Integer, default: 10000 }
+  - name: epochs
+    type: Integer
+    default: 2
+  - name: batch_size
+    type: Integer
+    default: 64
+  - name: vocab_size
+    type: Integer
+    default: 2000
+  - name: max_train_samples
+    type: Integer
+    default: 10000
 
 outputs:
-  - { name: model_output, type: Dataset }
-  - { name: train_log, type: Dataset }
+  - name: model_output
+    type: File
+  - name: train_log
+    type: File
 
 implementation:
   container:
@@ -18,78 +28,77 @@ implementation:
       - sh
       - -c
       - |
-          pip install torch datasets scikit-learn > /dev/null 2>&1
-          python3 -u - <<EOF
-          import sys
-          import torch
-          import torch.nn as nn
-          import torch.optim as optim
-          from torch.utils.data import DataLoader, TensorDataset
-          from datasets import load_dataset
-          from sklearn.feature_extraction.text import CountVectorizer
-          import argparse
-          import numpy as np
+        pip install --quiet torch datasets scikit-learn
+        python3 -u - <<EOF
+        import sys
+        import torch
+        import torch.nn as nn
+        import torch.optim as optim
+        from torch.utils.data import DataLoader, TensorDataset
+        from datasets import load_dataset
+        from sklearn.feature_extraction.text import CountVectorizer
+        import numpy as np
+        import os
 
-          # Simulate argparse for Elyra variables
-          import os
-          epochs = int(os.environ.get('ELYRA_INPUT_epochs', 2))
-          batch_size = int(os.environ.get('ELYRA_INPUT_batch_size', 64))
-          vocab_size = int(os.environ.get('ELYRA_INPUT_vocab_size', 2000))
-          max_train_samples = int(os.environ.get('ELYRA_INPUT_max_train_samples', 10000))
-          model_output = os.environ.get('ELYRA_OUTPUT_model_output', '/tmp/model.pt')
-          train_log = os.environ.get('ELYRA_OUTPUT_train_log', '/tmp/train.log')
+        # Read args from environment
+        epochs = int(os.environ.get('EPOCHS', 2))
+        batch_size = int(os.environ.get('BATCH_SIZE', 64))
+        vocab_size = int(os.environ.get('VOCAB_SIZE', 2000))
+        max_train_samples = int(os.environ.get('MAX_TRAIN_SAMPLES', 10000))
+        model_output = os.environ.get('MODEL_OUTPUT', '/tmp/model.pt')
+        train_log = os.environ.get('TRAIN_LOG', '/tmp/train.log')
 
-          sys.stdout = open(train_log, "w")
-          sys.stderr = sys.stdout
+        sys.stdout = open(train_log, "w")
+        sys.stderr = sys.stdout
 
-          ds = load_dataset("yelp_review_full", split=f"train[:{max_train_samples}]")
-          X = CountVectorizer(max_features=vocab_size).fit_transform(ds["text"]).toarray()
-          y = np.array(ds["label"])
-          dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.long))
-          loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        print("Loading Yelp dataset...", flush=True)
+        ds = load_dataset("yelp_review_full", split=f"train[:{max_train_samples}]")
+        X = CountVectorizer(max_features=vocab_size).fit_transform(ds["text"]).toarray()
+        y = np.array(ds["label"])
+        dataset = TensorDataset(torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.long))
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-          class SimpleNN(nn.Module):
-              def __init__(self, input_dim, n_classes):
-                  super().__init__()
-                  self.fc1 = nn.Linear(input_dim, 256)
-                  self.relu = nn.ReLU()
-                  self.fc2 = nn.Linear(256, n_classes)
-              def forward(self, x):
-                  return self.fc2(self.relu(self.fc1(x)))
+        class SimpleNN(nn.Module):
+            def __init__(self, input_dim, n_classes):
+                super().__init__()
+                self.fc1 = nn.Linear(input_dim, 256)
+                self.relu = nn.ReLU()
+                self.fc2 = nn.Linear(256, n_classes)
+            def forward(self, x):
+                return self.fc2(self.relu(self.fc1(x)))
 
-          device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-          model = SimpleNN(vocab_size, len(set(y))).to(device)
-          optimizer = optim.Adam(model.parameters(), lr=1e-3)
-          loss_fn = nn.CrossEntropyLoss()
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = SimpleNN(vocab_size, len(set(y))).to(device)
+        optimizer = optim.Adam(model.parameters(), lr=1e-3)
+        loss_fn = nn.CrossEntropyLoss()
 
-          for epoch in range(epochs):
-              total_loss, correct, total = 0, 0, 0
-              for xb, yb in loader:
-                  xb, yb = xb.to(device), yb.to(device)
-                  optimizer.zero_grad()
-                  preds = model(xb)
-                  loss = loss_fn(preds, yb)
-                  loss.backward()
-                  optimizer.step()
-                  total_loss += loss.item() * xb.size(0)
-                  correct += (preds.argmax(1) == yb).sum().item()
-                  total += xb.size(0)
-              print(f"Epoch {epoch+1}/{epochs} — loss={(total_loss/total):.4f}, acc={(correct/total):.4f}", flush=True)
+        for epoch in range(epochs):
+            total_loss, correct, total = 0, 0, 0
+            for xb, yb in loader:
+                xb, yb = xb.to(device), yb.to(device)
+                optimizer.zero_grad()
+                preds = model(xb)
+                loss = loss_fn(preds, yb)
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item() * xb.size(0)
+                correct += (preds.argmax(1) == yb).sum().item()
+                total += xb.size(0)
+            print(f"Epoch {epoch+1}/{epochs} — loss={(total_loss/total):.4f}, acc={(correct/total):.4f}", flush=True)
 
-          torch.save(model.state_dict(), model_output)
-          print("Model saved to", model_output, flush=True)
-          EOF
-
+        torch.save(model.state_dict(), model_output)
+        print("Model saved to", model_output, flush=True)
+        EOF
     env:
-      - name: ELYRA_INPUT_epochs
-        valueFrom: inputValue: epochs
-      - name: ELYRA_INPUT_batch_size
-        valueFrom: inputValue: batch_size
-      - name: ELYRA_INPUT_vocab_size
-        valueFrom: inputValue: vocab_size
-      - name: ELYRA_INPUT_max_train_samples
-        valueFrom: inputValue: max_train_samples
-      - name: ELYRA_OUTPUT_model_output
-        valueFrom: outputPath: model_output
-      - name: ELYRA_OUTPUT_train_log
-        valueFrom: outputPath: train_log
+      - name: EPOCHS
+        value: { inputValue: epochs }
+      - name: BATCH_SIZE
+        value: { inputValue: batch_size }
+      - name: VOCAB_SIZE
+        value: { inputValue: vocab_size }
+      - name: MAX_TRAIN_SAMPLES
+        value: { inputValue: max_train_samples }
+      - name: MODEL_OUTPUT
+        value: { outputPath: model_output }
+      - name: TRAIN_LOG
+        value: { outputPath: train_log }
