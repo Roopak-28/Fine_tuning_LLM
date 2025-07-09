@@ -8,26 +8,41 @@ inputs:
   - name: output_dir
     type: String
     description: Directory to save all model output and logs
+  - name: epochs
+    type: Integer
+    default: 2
+    description: Number of training epochs
+  - name: batch_size
+    type: Integer
+    default: 64
+    description: Training batch size
 
 outputs:
   - name: trained_model
     type: Directory
-    description: Directory containing trained PyTorch model file (.pt) and vectorizer
   - name: training_logs
     type: Directory
-    description: Directory containing training logs
+  - name: mlpipeline-metrics
+    type: Metrics
 
 implementation:
   container:
     image: python:3.9
+    resources:
+      requests:
+        cpu: "1"
+        memory: "2Gi"
+      limits:
+        cpu: "2"
+        memory: "4Gi"
     command:
       - sh
       - -c
       - |
         set -e
-        pip install --quiet torch datasets scikit-learn
+        pip install --quiet torch datasets scikit-learn joblib
         python3 -u - <<'EOF'
-        import argparse, os, shutil
+        import argparse, os, shutil, json
         import torch
         import torch.nn as nn
         import torch.optim as optim
@@ -41,19 +56,19 @@ implementation:
         parser.add_argument("--output_dir", type=str, required=True)
         parser.add_argument("--trained_model", type=str, required=True)
         parser.add_argument("--training_logs", type=str, required=True)
+        parser.add_argument("--epochs", type=int, default=2)
+        parser.add_argument("--batch_size", type=int, default=64)
         args = parser.parse_args()
 
         os.makedirs(args.output_dir, exist_ok=True)
         os.makedirs(args.trained_model, exist_ok=True)
         os.makedirs(args.training_logs, exist_ok=True)
 
-        # --- Load and preprocess dataset ---
         dataset = load_dataset(args.dataset_name, split="train[:3000]")
         texts = dataset["text"]
         labels = dataset["label"]
         num_classes = len(set(labels))
 
-        # --- Text vectorization ---
         vectorizer = CountVectorizer(max_features=2000)
         X = vectorizer.fit_transform(texts).toarray()
         y = np.array(labels)
@@ -61,9 +76,8 @@ implementation:
         X_tensor = torch.tensor(X, dtype=torch.float32)
         y_tensor = torch.tensor(y, dtype=torch.long)
         data = TensorDataset(X_tensor, y_tensor)
-        loader = DataLoader(data, batch_size=64, shuffle=True)
+        loader = DataLoader(data, batch_size=args.batch_size, shuffle=True)
 
-        # --- Simple NN definition ---
         class SimpleNN(nn.Module):
             def __init__(self, input_dim, num_classes):
                 super().__init__()
@@ -78,38 +92,37 @@ implementation:
         optimizer = optim.Adam(model.parameters(), lr=1e-3)
         loss_fn = nn.CrossEntropyLoss()
 
-        # --- Train loop ---
         log_file = os.path.join(args.training_logs, "train.log")
-        with open(log_file, "w") as log:
-            for epoch in range(2):
-                total_loss, correct, total = 0, 0, 0
-                for xb, yb in loader:
-                    xb, yb = xb.to(device), yb.to(device)
-                    optimizer.zero_grad()
-                    preds = model(xb)
-                    loss = loss_fn(preds, yb)
-                    loss.backward()
-                    optimizer.step()
-                    total_loss += loss.item() * xb.size(0)
-                    correct += (preds.argmax(1) == yb).sum().item()
-                    total += xb.size(0)
-                acc = correct / total
-                avg_loss = total_loss / total
-                log.write(f"Epoch {epoch+1}/2 — loss={avg_loss:.4f}, acc={acc:.4f}\n")
-                log.flush()
+        best_acc = 0
+        for epoch in range(args.epochs):
+            total_loss, correct, total = 0, 0, 0
+            for xb, yb in loader:
+                xb, yb = xb.to(device), yb.to(device)
+                optimizer.zero_grad()
+                preds = model(xb)
+                loss = loss_fn(preds, yb)
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item() * xb.size(0)
+                correct += (preds.argmax(1) == yb).sum().item()
+                total += xb.size(0)
+            acc = correct / total
+            avg_loss = total_loss / total
+            best_acc = max(best_acc, acc)
+            with open(log_file, "a") as log:
+                log.write(f"Epoch {epoch+1}/{args.epochs} — loss={avg_loss:.4f}, acc={acc:.4f}\n")
 
-        # --- Save model and vectorizer ---
         torch.save(model.state_dict(), os.path.join(args.trained_model, "model.pt"))
         import joblib
         joblib.dump(vectorizer, os.path.join(args.trained_model, "vectorizer.pkl"))
-
-        # Optionally, copy any training logs to output dir
         shutil.copy2(log_file, os.path.join(args.training_logs, "train.log"))
 
-        # Write completion
+        # Kubeflow metrics reporting
+        with open('/mlpipeline-metrics.json', 'w') as f:
+            json.dump({'metrics':[{"name":"accuracy","number": float(best_acc)}]}, f)
+
         with open(os.path.join(args.training_logs, "done.txt"), "w") as f:
             f.write("Training complete.")
-
         EOF
     args:
       - --dataset_name
@@ -120,3 +133,7 @@ implementation:
       - { outputPath: trained_model }
       - --training_logs
       - { outputPath: training_logs }
+      - --epochs
+      - { inputValue: epochs }
+      - --batch_size
+      - { inputValue: batch_size }
