@@ -1,14 +1,15 @@
-name: Create Time Series Sequences
-description: Generates input-output sequences from normalized time series data grouped by component ID.
+name: PyTorch Yelp Simple NN Training
+description: Trains a simple PyTorch model for text classification on Yelp Review Full dataset.
 
 inputs:
-  - { name: json_data, type: JsonArray }
-  - { name: input_len, type: Integer }
-  - { name: output_len, type: Integer }
+  - { name: epochs, type: Integer, default: 2 }
+  - { name: batch_size, type: Integer, default: 64 }
+  - { name: vocab_size, type: Integer, default: 2000 }
+  - { name: max_train_samples, type: Integer, default: 10000 }
 
 outputs:
-  - { name: X_sequences, type: NumpyArray }
-  - { name: y_sequences, type: NumpyArray }
+  - { name: model_output, type: File }
+  - { name: train_log, type: File }
 
 implementation:
   container:
@@ -17,60 +18,106 @@ implementation:
       - sh
       - -c
       - |
-        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet pandas numpy || \
-        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet pandas numpy --user
+        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet torch datasets scikit-learn || \
+        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet torch datasets scikit-learn --user
         exec "$0" "$@"
       - python3
       - -u
       - -c
       - |
-        import pandas as pd
-        import numpy as np
-        import json
-        import argparse
         import os
-
-        def create_sequences(df, input_len, output_len):
-            X, y = [], []
-            grouped = df.groupby('component_id')
-            for _, group in grouped:
-                values = group[['value_norm', 'component_id']].values
-                for i in range(len(values) - input_len - output_len):
-                    X.append(values[i:i + input_len])
-                    y.append(values[i + input_len:i + input_len + output_len, 0])
-            return np.array(X), np.array(y)
+        import torch
+        import torch.nn as nn
+        import torch.optim as optim
+        from torch.utils.data import DataLoader, TensorDataset
+        from datasets import load_dataset
+        from sklearn.feature_extraction.text import CountVectorizer
+        import argparse
+        import numpy as np
 
         parser = argparse.ArgumentParser()
-        parser.add_argument("--json_data", type=str, required=True)
-        parser.add_argument("--input_len", type=int, required=True)
-        parser.add_argument("--output_len", type=int, required=True)
-        parser.add_argument("--X_sequences", type=str)
-        parser.add_argument("--y_sequences", type=str)
+        parser.add_argument("--epochs", type=int, required=True)
+        parser.add_argument("--batch_size", type=int, required=True)
+        parser.add_argument("--vocab_size", type=int, required=True)
+        parser.add_argument("--max_train_samples", type=int, required=True)
+        parser.add_argument("--model_output", type=str, required=True)
+        parser.add_argument("--train_log", type=str, required=True)
         args = parser.parse_args()
 
-        # Load JSON input
-        with open(args.json_data, "r") as f:
-            data = json.load(f)
-        df = pd.DataFrame(data)
+        # Logging setup
+        import sys
+        sys.stdout = open(args.train_log, "w")
+        sys.stderr = sys.stdout
 
-        X, y = create_sequences(df, args.input_len, args.output_len)
+        print("Loading dataset...")
+        ds = load_dataset("yelp_review_full", split="train[:{}]".format(args.max_train_samples))
+        texts = ds["text"]
+        labels = ds["label"]
+        num_classes = len(set(labels))
 
-        # Save NumPy arrays
-        os.makedirs(os.path.dirname(args.X_sequences), exist_ok=True)
-        os.makedirs(os.path.dirname(args.y_sequences), exist_ok=True)
+        print("Vectorizing text...")
+        vectorizer = CountVectorizer(max_features=args.vocab_size)
+        X = vectorizer.fit_transform(texts).toarray()
+        y = np.array(labels)
 
-        np.save(args.X_sequences, X)
-        np.save(args.y_sequences, y)
+        print("Preparing tensors...")
+        X_tensor = torch.tensor(X, dtype=torch.float32)
+        y_tensor = torch.tensor(y, dtype=torch.long)
+        dataset = TensorDataset(X_tensor, y_tensor)
+        loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
-        print(f"Generated {len(X)} input-output sequence pairs.")
+        print("Building model...")
+        class SimpleNN(nn.Module):
+            def __init__(self, input_dim, num_classes):
+                super().__init__()
+                self.fc1 = nn.Linear(input_dim, 256)
+                self.relu = nn.ReLU()
+                self.fc2 = nn.Linear(256, num_classes)
+
+            def forward(self, x):
+                x = self.fc1(x)
+                x = self.relu(x)
+                x = self.fc2(x)
+                return x
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = SimpleNN(args.vocab_size, num_classes).to(device)
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(model.parameters(), lr=1e-3)
+
+        print("Starting training...")
+        for epoch in range(args.epochs):
+            total_loss = 0
+            correct = 0
+            total = 0
+            for batch_x, batch_y in loader:
+                batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+                optimizer.zero_grad()
+                outputs = model(batch_x)
+                loss = criterion(outputs, batch_y)
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item() * batch_x.size(0)
+                preds = outputs.argmax(1)
+                correct += (preds == batch_y).sum().item()
+                total += batch_x.size(0)
+            acc = correct / total
+            avg_loss = total_loss / total
+            print(f"Epoch {epoch+1}/{args.epochs} - Loss: {avg_loss:.4f} - Accuracy: {acc:.4f}")
+
+        print("Saving model...")
+        torch.save(model.state_dict(), args.model_output)
+        print("Training complete. Model saved at", args.model_output)
     args:
-      - --json_data
-      - { inputPath: json_data }
-      - --input_len
-      - { inputValue: input_len }
-      - --output_len
-      - { inputValue: output_len }
-      - --X_sequences
-      - { outputPath: X_sequences }
-      - --y_sequences
-      - { outputPath: y_sequences }
+      - --epochs
+      - { inputValue: epochs }
+      - --batch_size
+      - { inputValue: batch_size }
+      - --vocab_size
+      - { inputValue: vocab_size }
+      - --max_train_samples
+      - { inputValue: max_train_samples }
+      - --model_output
+      - { outputPath: model_output }
+      - --train_log
+      - { outputPath: train_log }
