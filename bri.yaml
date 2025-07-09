@@ -1,33 +1,15 @@
-name: Universal Model Fine-tuning
-description: Fine-tunes a model using HuggingFace or PyTorch code.
+name: Hello World
+description: A dummy component for Elyra test
 inputs:
-  - { name: task_type,      type: String,  description: Task type }
-  - { name: dataset_name,   type: String,  description: Dataset name or path }
-  - { name: model_uri,      type: String,  description: Model hub ID or path }
-  - { name: framework,      type: String,  description: 'huggingface' or 'pytorch' }
-  - { name: output_dir,     type: String,  description: Output dir }
-  - { name: epochs,         type: Integer, description: Number of epochs, default: 1 }
+  - { name: input_str, type: String, description: Any string }
 outputs:
-  - { name: trained_model,  type: Directory, description: Fine-tuned model }
-  - { name: training_logs,  type: Directory, description: Logs and status }
+  - { name: output_dir, type: Directory, description: Output dir }
 implementation:
   container:
     image: python:3.9
-    command: ["python", "train.py"]
+    command: ["python", "hello.py"]
     args:
-      - --task_type
-      - { inputValue: task_type }
-      - --dataset_name
-      - { inputValue: dataset_name }
-      - --model_uri
-      - { inputValue: model_uri }
-      - --framework
-      - { inputValue: framework }
+      - --input_str
+      - { inputValue: input_str }
       - --output_dir
-      - { inputValue: output_dir }
-      - --trained_model
-      - { outputPath: trained_model }
-      - --training_logs
-      - { outputPath: training_logs }
-      - --epochs
-      - { inputValue: epochs }
+      - { outputPath: output_dir }
