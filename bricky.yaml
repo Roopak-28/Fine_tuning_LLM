@@ -1,0 +1,133 @@
+name: PyTorch Yelp Text Classifier (TorchText, No HF)
+description: Train a simple PyTorch NN on Yelp Review CSV using TorchText (no Hugging Face) as a Kubeflow/Elyra pipeline step.
+
+inputs:
+  - name: data_path
+    type: String
+    description: Path to Yelp Review CSV file ("label", "text")
+    default: /mnt/yelp/yelp_train.csv
+  - name: batch_size
+    type: Integer
+    description: Training batch size
+    default: 64
+  - name: epochs
+    type: Integer
+    description: Number of epochs
+    default: 3
+
+outputs:
+  - name: model_dir
+    type: Directory
+    description: Output directory for model and vocab
+
+implementation:
+  container:
+    image: python:3.9
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        pip install --quiet --no-cache-dir torch torchtext pandas
+        cat << 'EOF' > train_yelp_pytorch.py
+        import os
+        import torch
+        from torch import nn, optim
+        from torch.utils.data import DataLoader, Dataset, random_split
+        from torchtext.vocab import build_vocab_from_iterator
+        from torchtext.data.utils import get_tokenizer
+        import pandas as pd
+        import pickle
+
+        DATA_PATH = os.environ.get('DATA_PATH', 'yelp_train.csv')
+        BATCH_SIZE = int(os.environ.get('BATCH_SIZE', 64))
+        EPOCHS = int(os.environ.get('EPOCHS', 3))
+        MODEL_DIR = os.environ.get('MODEL_DIR', './model_out')
+        MAX_VOCAB_SIZE = 20000
+        MAX_SEQ_LEN = 200
+
+        df = pd.read_csv(DATA_PATH)
+        texts = df['text'].astype(str).tolist()
+        labels = df['label'].astype(int).tolist()
+
+        tokenizer = get_tokenizer("basic_english")
+        def yield_tokens(texts):
+            for text in texts:
+                yield tokenizer(text)
+
+        vocab = build_vocab_from_iterator(yield_tokens(texts), specials=["<unk>", "<pad>"], max_tokens=MAX_VOCAB_SIZE)
+        vocab.set_default_index(vocab["<unk>"])
+
+        def text_to_tensor(text):
+            tokens = tokenizer(text)
+            token_ids = vocab(tokens)
+            if len(token_ids) < MAX_SEQ_LEN:
+                token_ids += [vocab["<pad>"]] * (MAX_SEQ_LEN - len(token_ids))
+            else:
+                token_ids = token_ids[:MAX_SEQ_LEN]
+            return torch.tensor(token_ids, dtype=torch.long)
+
+        class YelpDataset(Dataset):
+            def __init__(self, texts, labels):
+                self.texts = texts
+                self.labels = labels
+            def __len__(self):
+                return len(self.texts)
+            def __getitem__(self, idx):
+                return text_to_tensor(self.texts[idx]), torch.tensor(self.labels[idx]-1, dtype=torch.long)
+
+        dataset = YelpDataset(texts, labels)
+        train_len = int(len(dataset) * 0.8)
+        train_set, val_set = random_split(dataset, [train_len, len(dataset)-train_len])
+        train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True)
+        val_loader = DataLoader(val_set, batch_size=BATCH_SIZE)
+
+        class TextClassifier(nn.Module):
+            def __init__(self, vocab_size, embed_dim, num_class):
+                super().__init__()
+                self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=vocab["<pad>"])
+                self.fc1 = nn.Linear(embed_dim * MAX_SEQ_LEN, 128)
+                self.relu = nn.ReLU()
+                self.fc2 = nn.Linear(128, num_class)
+            def forward(self, x):
+                x = self.embedding(x)
+                x = x.view(x.size(0), -1)
+                x = self.fc1(x)
+                x = self.relu(x)
+                x = self.fc2(x)
+                return x
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = TextClassifier(len(vocab), 64, 5).to(device)
+        optimizer = optim.Adam(model.parameters(), lr=1e-3)
+        criterion = nn.CrossEntropyLoss()
+
+        for epoch in range(EPOCHS):
+            model.train()
+            total_loss = 0
+            for xb, yb in train_loader:
+                xb, yb = xb.to(device), yb.to(device)
+                optimizer.zero_grad()
+                out = model(xb)
+                loss = criterion(out, yb)
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+            print(f"Epoch {epoch+1} loss: {total_loss/len(train_loader):.4f}")
+
+        os.makedirs(MODEL_DIR, exist_ok=True)
+        torch.save(model.state_dict(), os.path.join(MODEL_DIR, "model.pt"))
+        with open(os.path.join(MODEL_DIR, "vocab.pkl"), "wb") as f:
+            pickle.dump(vocab, f)
+        print("Training completed, model saved.")
+        EOF
+        DATA_PATH="$0"
+        BATCH_SIZE="$1"
+        EPOCHS="$2"
+        MODEL_DIR="$3"
+        python3 train_yelp_pytorch.py
+    args:
+      - { inputValue: data_path }
+      - { inputValue: batch_size }
+      - { inputValue: epochs }
+      - { outputPath: model_dir }
