@@ -126,14 +126,14 @@ implementation:
         EOF
     args:
       - --dataset_name
-      - { inputValue: dataset_name }
+      - "{ inputValue: dataset_name }"
       - --output_dir
-      - { inputValue: output_dir }
+      - "{ inputValue: output_dir }"
       - --trained_model
-      - { outputPath: trained_model }
+      - "{ outputPath: trained_model }"
       - --training_logs
-      - { outputPath: training_logs }
+      - "{ outputPath: training_logs }"
       - --epochs
-      - { inputValue: epochs }
+      - "{ inputValue: epochs }"
       - --batch_size
-      - { inputValue: batch_size }
+      - "{ inputValue: batch_size }"
