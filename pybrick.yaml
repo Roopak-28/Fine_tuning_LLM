@@ -1,0 +1,111 @@
+name: PyTorch Yelp Simple NN Training
+description: Trains a simple PyTorch model for text classification on Yelp Review Full dataset (inline component).
+
+inputs:
+  - name: dataset_name
+    type: String
+    description: Hugging Face dataset name (e.g. yelp_review_full)
+  - name: output_dir
+    type: String
+    description: Directory to save trained model outputs
+
+outputs:
+  - name: trained_model
+    type: Directory
+    description: Fine-tuned model files
+  - name: training_logs
+    type: Directory
+    description: Training logs and status
+
+implementation:
+  container:
+    image: python:3.9
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        pip install --quiet --no-cache-dir torch datasets scikit-learn
+        python3 -u -c "$0" "$@"  # inline script
+      - |
+        import argparse, os, shutil, torch
+        from torch import nn, optim
+        from torch.utils.data import DataLoader, Dataset
+        from datasets import load_dataset
+        from sklearn.preprocessing import LabelEncoder
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--dataset_name", type=str, required=True)
+        parser.add_argument("--output_dir", type=str, required=True)
+        parser.add_argument("--trained_model", type=str, required=True)
+        parser.add_argument("--training_logs", type=str, required=True)
+        args = parser.parse_args()
+
+        os.makedirs(args.output_dir, exist_ok=True)
+        os.makedirs(args.trained_model, exist_ok=True)
+        os.makedirs(args.training_logs, exist_ok=True)
+
+        # Load dataset (subset for demo)
+        ds = load_dataset(args.dataset_name, split="train[:3000]")
+        texts, labels = ds["text"], ds["label"]
+        label_encoder = LabelEncoder()
+        y = label_encoder.fit_transform(labels)
+
+        # Simple preprocessing: Bag of Words encoding
+        from sklearn.feature_extraction.text import CountVectorizer
+        vectorizer = CountVectorizer(max_features=2000)
+        X = vectorizer.fit_transform(texts).toarray()
+
+        # PyTorch Dataset
+        class YelpDataset(Dataset):
+            def __init__(self, X, y):
+                self.X = torch.tensor(X, dtype=torch.float32)
+                self.y = torch.tensor(y, dtype=torch.long)
+            def __len__(self): return len(self.y)
+            def __getitem__(self, idx): return self.X[idx], self.y[idx]
+
+        train_ds = YelpDataset(X, y)
+        train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
+
+        # Simple feedforward model
+        model = nn.Sequential(
+            nn.Linear(X.shape[1], 128),
+            nn.ReLU(),
+            nn.Linear(128, len(set(y)))
+        )
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(model.parameters(), lr=1e-3)
+
+        # Training loop
+        for epoch in range(3):
+            losses = []
+            for xb, yb in train_loader:
+                optimizer.zero_grad()
+                out = model(xb)
+                loss = criterion(out, yb)
+                loss.backward()
+                optimizer.step()
+                losses.append(loss.item())
+            with open(os.path.join(args.training_logs, f"log_epoch{epoch+1}.txt"), "w") as f:
+                f.write(f"Epoch {epoch+1}, Loss: {sum(losses)/len(losses):.4f}\n")
+
+        # Save model
+        torch.save(model.state_dict(), os.path.join(args.trained_model, "model.pt"))
+        # Save vocab
+        import pickle
+        with open(os.path.join(args.trained_model, "vectorizer.pkl"), "wb") as f:
+            pickle.dump(vectorizer, f)
+        with open(os.path.join(args.trained_model, "label_encoder.pkl"), "wb") as f:
+            pickle.dump(label_encoder, f)
+        with open(os.path.join(args.training_logs, "log.txt"), "w") as f:
+            f.write("Training completed successfully.")
+
+    args:
+      - --dataset_name
+      - { inputValue: dataset_name }
+      - --output_dir
+      - { inputValue: output_dir }
+      - --trained_model
+      - { outputPath: trained_model }
+      - --training_logs
+      - { outputPath: training_logs }

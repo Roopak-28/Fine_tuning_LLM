@@ -1,0 +1,7 @@
+transformers==4.53.0
+peft==0.11.1
+kubeflow-training==1.9.2
+ipykernel
+torch >= 2.0
+accelerate
+datasets == 2.19.0

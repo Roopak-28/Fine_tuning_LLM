@@ -1,0 +1,69 @@
+name: Evaluate Random Forest model
+description: Evaluates a trained Random Forest model and outputs predictions and accuracy.
+inputs:
+  - { name: model, type: Model }
+  - { name: X_test, type: JsonArray }
+  - { name: y_test, type: JsonArray }
+outputs:
+  - { name: predictions, type: JsonArray }
+  - { name: accuracy, type: Float }
+implementation:
+  container:
+    image: python:3.9
+    command:
+      - sh
+      - -c
+      - |
+        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location pandas scikit-learn joblib || \
+        PIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location pandas scikit-learn joblib --user
+        exec "$0" "$@"
+      - python3
+      - -u
+      - -c
+      - |
+        import argparse
+        import json
+        import os
+        import joblib
+        import pandas as pd
+        from sklearn.metrics import accuracy_score
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--model", type=str, required=True)
+        parser.add_argument("--X_test", type=str, required=True)
+        parser.add_argument("--y_test", type=str, required=True)
+        parser.add_argument("--predictions", type=str, required=True)
+        parser.add_argument("--accuracy", type=str, required=True)
+        args = parser.parse_args()
+
+        # Load data and model
+        model = joblib.load(args.model)
+        with open(args.X_test, "r") as f:
+            X_test = pd.DataFrame(json.load(f))
+        with open(args.y_test, "r") as f:
+            y_test = json.load(f)
+
+        # Evaluate
+        y_pred = model.predict(X_test)
+        accuracy = accuracy_score(y_test, y_pred)
+
+        # Ensure output directory exists
+        os.makedirs(os.path.dirname(args.predictions), exist_ok=True)
+        os.makedirs(os.path.dirname(args.accuracy), exist_ok=True)
+
+        # Output predictions and accuracy
+        with open(args.predictions, "w") as f:
+            json.dump(y_pred.tolist(), f)
+        with open(args.accuracy, "w") as f:
+            f.write(str(accuracy))
+    args:
+      - --model
+      - { inputPath: model }
+      - --X_test
+      - { inputPath: X_test }
+      - --y_test
+      - { inputPath: y_test }
+      - --predictions
+      - { outputPath: predictions }
+      - --accuracy
+      - { outputPath: accuracy }

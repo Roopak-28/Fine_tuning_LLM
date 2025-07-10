@@ -1,0 +1,15 @@
+name: Hello World
+description: A dummy component for Elyra test
+inputs:
+  - { name: input_str, type: String, description: Any string }
+outputs:
+  - { name: output_dir, type: Directory, description: Output dir }
+implementation:
+  container:
+    image: python:3.9
+    command: ["python", "hello.py"]
+    args:
+      - --input_str
+      - { inputValue: input_str }
+      - --output_dir
+      - { outputPath: output_dir }
