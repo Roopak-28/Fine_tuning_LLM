@@ -8,18 +8,6 @@ inputs:
   - name: output_dir
     type: String
     description: Directory to save trained model outputs
-  - name: epochs
-    type: Integer
-    description: Number of epochs to train
-    default: 3
-  - name: batch_size
-    type: Integer
-    description: Training batch size
-    default: 32
-  - name: learning_rate
-    type: Number
-    description: Learning rate for optimizer
-    default: 0.001
 
 outputs:
   - name: trained_model
@@ -51,9 +39,6 @@ implementation:
         parser.add_argument("--output_dir", type=str, required=True)
         parser.add_argument("--trained_model", type=str, required=True)
         parser.add_argument("--training_logs", type=str, required=True)
-        parser.add_argument("--epochs", type=int, required=True)
-        parser.add_argument("--batch_size", type=int, required=True)
-        parser.add_argument("--learning_rate", type=float, required=True)
         args = parser.parse_args()
 
         os.makedirs(args.output_dir, exist_ok=True)
@@ -80,7 +65,7 @@ implementation:
             def __getitem__(self, idx): return self.X[idx], self.y[idx]
 
         train_ds = YelpDataset(X, y)
-        train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
+        train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
 
         # Simple feedforward model
         model = nn.Sequential(
@@ -89,10 +74,10 @@ implementation:
             nn.Linear(128, len(set(y)))
         )
         criterion = nn.CrossEntropyLoss()
-        optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+        optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
         # Training loop
-        for epoch in range(args.epochs):
+        for epoch in range(3):
             losses = []
             for xb, yb in train_loader:
                 optimizer.zero_grad()
@@ -124,9 +109,3 @@ implementation:
       - { outputPath: trained_model }
       - --training_logs
       - { outputPath: training_logs }
-      - --epochs
-      - { inputValue: epochs }
-      - --batch_size
-      - { inputValue: batch_size }
-      - --learning_rate
-      - { inputValue: learning_rate }
