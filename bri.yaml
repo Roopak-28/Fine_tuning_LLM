@@ -1,6 +1,7 @@
+---
 name: PyTorch Simple NN Training on Yelp
-description: Trains a simple PyTorch neural network model for text classification on Yelp Review Full dataset (inline component).
-
+description: Trains a simple PyTorch neural network model for text
+  classification on Yelp Review Full dataset (inline component).
 inputs:
   - name: dataset_name
     type: String
@@ -16,7 +17,6 @@ inputs:
     type: Integer
     default: 64
     description: Training batch size
-
 outputs:
   - name: trained_model
     type: Directory
@@ -24,59 +24,91 @@ outputs:
     type: Directory
   - name: mlpipeline-metrics
     type: Metrics
-
 implementation:
   container:
     image: python:3.9
     resources:
       requests:
         cpu: "1"
-        memory: "2Gi"
+        memory: 2Gi
       limits:
         cpu: "2"
-        memory: "4Gi"
+        memory: 4Gi
     command:
       - sh
       - -c
-      - |
+      - >
         set -e
+
         pip install --quiet torch datasets scikit-learn joblib
+
         python3 -u - <<'EOF'
+
         import argparse, os, shutil, json
+
         import torch
+
         import torch.nn as nn
+
         import torch.optim as optim
+
         from torch.utils.data import DataLoader, TensorDataset
+
         from datasets import load_dataset
+
         from sklearn.feature_extraction.text import CountVectorizer
+
         import numpy as np
 
+
         parser = argparse.ArgumentParser()
+
         parser.add_argument("--dataset_name", type=str, required=True)
+
         parser.add_argument("--output_dir", type=str, required=True)
+
         parser.add_argument("--trained_model", type=str, required=True)
+
         parser.add_argument("--training_logs", type=str, required=True)
+
         parser.add_argument("--epochs", type=int, default=2)
+
         parser.add_argument("--batch_size", type=int, default=64)
+
         args = parser.parse_args()
 
+
         os.makedirs(args.output_dir, exist_ok=True)
+
         os.makedirs(args.trained_model, exist_ok=True)
+
         os.makedirs(args.training_logs, exist_ok=True)
 
+
         dataset = load_dataset(args.dataset_name, split="train[:3000]")
+
         texts = dataset["text"]
+
         labels = dataset["label"]
+
         num_classes = len(set(labels))
 
+
         vectorizer = CountVectorizer(max_features=2000)
+
         X = vectorizer.fit_transform(texts).toarray()
+
         y = np.array(labels)
 
+
         X_tensor = torch.tensor(X, dtype=torch.float32)
+
         y_tensor = torch.tensor(y, dtype=torch.long)
+
         data = TensorDataset(X_tensor, y_tensor)
+
         loader = DataLoader(data, batch_size=args.batch_size, shuffle=True)
+
 
         class SimpleNN(nn.Module):
             def __init__(self, input_dim, num_classes):
@@ -88,12 +120,18 @@ implementation:
                 return self.fc2(self.relu(self.fc1(x)))
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         model = SimpleNN(X.shape[1], num_classes).to(device)
+
         optimizer = optim.Adam(model.parameters(), lr=1e-3)
+
         loss_fn = nn.CrossEntropyLoss()
 
+
         log_file = os.path.join(args.training_logs, "train.log")
+
         best_acc = 0
+
         for epoch in range(args.epochs):
             total_loss, correct, total = 0, 0, 0
             for xb, yb in loader:
@@ -113,11 +151,16 @@ implementation:
                 log.write(f"Epoch {epoch+1}/{args.epochs} — loss={avg_loss:.4f}, acc={acc:.4f}\n")
 
         torch.save(model.state_dict(), os.path.join(args.trained_model, "model.pt"))
+
         import joblib
+
         joblib.dump(vectorizer, os.path.join(args.trained_model, "vectorizer.pkl"))
+
         shutil.copy2(log_file, os.path.join(args.training_logs, "train.log"))
 
+
         # Kubeflow metrics reporting
+
         with open('/mlpipeline-metrics.json', 'w') as f:
             json.dump({'metrics':[{"name":"accuracy","number": float(best_acc)}]}, f)
 
